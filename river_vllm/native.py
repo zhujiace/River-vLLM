@@ -11,6 +11,7 @@ from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.v1.worker.gpu_worker import Worker
 
 from .conditional_decode import DirectTailDecode
+from .runtime import DECODE_GRAPHS
 from .worker import RiverModelRunner
 
 
@@ -61,6 +62,9 @@ class NativeGraphRiverRunner(RiverModelRunner):
 
         body = self.get_model().model
         fixed = self.model_config.hf_config.river_native_fixed
+        layout = getattr(self.model_config.hf_config, "river_decode_graph", "direct")
+        if layout not in DECODE_GRAPHS:
+            raise ValueError(f"river_decode_graph must be one of {DECODE_GRAPHS}")
         decoder = None
         if not fixed:
             norms = [body._norm_for(depth) for depth in range(1, body.end_layer + 1)]
@@ -69,7 +73,17 @@ class NativeGraphRiverRunner(RiverModelRunner):
                        and norm.variance_size_override is None for norm in norms):
                 raise ValueError("River's decode norms must share RMSNorm settings")
             weights = torch.stack([norm.weight.detach() for norm in norms])
-            decoder = DirectTailDecode(body, body.options["threshold"], weights, norm_eps)
+            if layout == "ifelse":
+                from .ifelse import IfElseDecode
+                from .ifelse_bridge import load_extension
+
+                pool = self.cudagraph_manager.pool
+                if pool is None or self.vllm_config.use_cumem_cudagraph_pool:
+                    raise ValueError("IF/ELSE capture requires the native Torch graph pool")
+                load_extension()
+                decoder = IfElseDecode(body, body.options["threshold"], weights, norm_eps, pool=pool)
+            else:
+                decoder = DirectTailDecode(body, body.options["threshold"], weights, norm_eps)
 
         captured_depths = {}
 

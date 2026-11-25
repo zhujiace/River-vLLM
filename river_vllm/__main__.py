@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .runtime import build_llm
+from .runtime import DECODE_GRAPHS, build_llm
 
 
 def main():
@@ -12,6 +12,8 @@ def main():
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--tokenizer", type=Path)
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--decode-graph", choices=DECODE_GRAPHS, default="direct",
+                        help="direct exit, or a one-layer delayed native IF/ELSE graph")
     parser.add_argument("--capture-sizes", type=int, nargs="+", default=[1])
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=32)
@@ -23,7 +25,7 @@ def main():
         parser.error("--max-tokens must be positive")
 
     llm = build_llm(args.model, tokenizer=args.tokenizer, threshold=args.threshold,
-                    capture_sizes=args.capture_sizes)
+                    capture_sizes=args.capture_sizes, decode_graph=args.decode_graph)
     from vllm import SamplingParams
 
     params = SamplingParams(temperature=0, max_tokens=args.max_tokens)

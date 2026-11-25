@@ -3,13 +3,18 @@
 import os
 
 
-def build_llm(model, *, tokenizer=None, threshold=0.5, capture_sizes=(1,)):
+DECODE_GRAPHS = ("direct", "ifelse")
+
+
+def build_llm(model, *, tokenizer=None, threshold=0.5, capture_sizes=(1,), decode_graph="direct"):
     """Load a local River GPTQ checkpoint and capture its decode shapes."""
     sizes = sorted(set(capture_sizes))
     if not sizes or sizes[0] < 1 or sizes[-1] > 64:
         raise ValueError("Capture sizes must be between 1 and 64")
     if not 0 <= threshold <= 1:
         raise ValueError("The exit threshold must be between 0 and 1")
+    if decode_graph not in DECODE_GRAPHS:
+        raise ValueError(f"decode_graph must be one of {DECODE_GRAPHS}")
     os.environ["VLLM_USE_V2_MODEL_RUNNER"] = "1"
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
@@ -33,6 +38,7 @@ def build_llm(model, *, tokenizer=None, threshold=0.5, capture_sizes=(1,)):
         hf_overrides={
             "river_options": dict(RIVER_OPTIONS, threshold=threshold),
             "river_native_fixed": False,
+            "river_decode_graph": decode_graph,
         },
         compilation_config={
             "mode": 0, "cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": sizes,

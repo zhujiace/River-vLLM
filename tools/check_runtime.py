@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from river_vllm.runtime import build_llm
+from river_vllm.runtime import DECODE_GRAPHS, build_llm
 
 
 def install_probe(worker):
@@ -33,8 +33,8 @@ def drain_probe(worker):
     return events
 
 
-def check(model):
-    llm = build_llm(model, threshold=0.5, capture_sizes=(1, 2, 4, 8))
+def check(model, decode_graph="direct", threshold=0.5):
+    llm = build_llm(model, threshold=threshold, capture_sizes=(1, 2, 4, 8), decode_graph=decode_graph)
     from vllm import SamplingParams
 
     assert llm.collective_rpc(install_probe) == [[1, 2, 4, 8]]
@@ -59,4 +59,7 @@ def check(model):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
-    check(parser.parse_args().model)
+    parser.add_argument("--decode-graph", choices=DECODE_GRAPHS, default="direct")
+    parser.add_argument("--threshold", type=float, default=0.5)
+    options = parser.parse_args()
+    check(options.model, options.decode_graph, options.threshold)

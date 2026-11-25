@@ -12,3 +12,6 @@ requires-python = ">=3.11"
 [tool.setuptools]
 packages = ["river_vllm"]
 license-files = ["LICENSES/Apache-2.0.txt"]
+
+[tool.setuptools.package-data]
+river_vllm = ["ifelse_bridge.cpp"]
