@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "river-vllm"
-version = "0.1.0"
+version = "0.2.0"
 description = "River-LLM with vLLM V2 native conditional CUDA graphs"
 readme = "README.md"
 requires-python = ">=3.11"

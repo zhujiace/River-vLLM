@@ -6,8 +6,11 @@ from unittest.mock import patch
 import torch
 from torch.nn import functional as F
 
+from .conditional_decode import normalize_for_cosine
+from .latched import cosine_scores
 from .model import snapshot_hidden
 from .phases import current_phases
+from .runtime import DEFAULT_DECODE_GRAPH
 
 
 def by_indices(bf16, w4, inputs, row_sets):
@@ -44,49 +47,75 @@ def mixed_layer(layer, positions, hidden, residual, row_sets):
 
 
 class EagerDispatch:
-    def __init__(self, body):
+    def __init__(self, body, *, decode_graph=DEFAULT_DECODE_GRAPH):
         self.body = body
         self.original = body.forward
+        self.latched = decode_graph == DEFAULT_DECODE_GRAPH
 
     def pack(self, ids, positions, starts, ends, prefill):
         body = self.body
         hidden = body.embed_input_ids(ids)
-        residual = None
         full = [row for a, b, flag in zip(starts, ends, prefill, strict=True) if flag for row in range(a, b)]
         decode = [a for a, flag in zip(starts, prefill, strict=True) if not flag]
         row_sets = tuple(torch.tensor(rows, device=ids.device, dtype=torch.long)
                          for rows in (full, decode))
-        depth = body.end_layer
-        for index, layer in enumerate(body.layers, 1):
-            if index > depth:
-                hidden, residual = mixed_layer(layer, positions, hidden, residual, row_sets)
-                continue
-            before = snapshot_hidden(hidden, residual) if index < depth else None
-            hidden, residual = layer(positions, hidden, residual)
-            if before is not None:
-                scores = F.cosine_similarity(hidden + residual, before, dim=-1)
-                if scores.index_select(0, row_sets[1]).gt(body.options["threshold"]).all().item():
-                    depth = index
-        if depth == body.end_layer:
-            return body.norm(hidden, residual)[0], depth
-        output, _ = by_indices(body.norm, body._norm_for(depth), (hidden, residual), row_sets)
-        return output, depth
+        return self.forward(positions, hidden, row_sets)
 
     def decode(self, positions, hidden):
+        return self.forward(positions, hidden)[0]
+
+    def forward(self, positions, hidden, row_sets=None):
         body = self.body
         residual = None
         depth = body.end_layer
+        threshold = body.options["threshold"]
+        decode_rows = None if row_sets is None else row_sets[1]
+        seen = None
+        if self.latched:
+            epsilon = hidden.new_tensor(1e-8, dtype=torch.float32)
+            initial = hidden if decode_rows is None else hidden.index_select(0, decode_rows)
+            before = normalize_for_cosine(initial, epsilon)
+
         for index, layer in enumerate(body.layers, 1):
-            before = snapshot_hidden(hidden, residual) if index < depth else None
+            if index > depth:
+                if row_sets is None:
+                    hidden, residual = layer._forward_quant(positions, hidden, residual)
+                else:
+                    hidden, residual = mixed_layer(layer, positions, hidden, residual, row_sets)
+                continue
+            if index < depth and not self.latched:
+                before = snapshot_hidden(hidden, residual)
             hidden, residual = layer(positions, hidden, residual)
-            if (before is not None
-                    and F.cosine_similarity(hidden + residual, before, dim=-1)
-                    .gt(body.options["threshold"]).all().item()):
+            if index >= depth:
+                continue
+
+            if self.latched:
+                h, r = hidden, residual
+                if decode_rows is not None:
+                    h = h.index_select(0, decode_rows)
+                    r = r.index_select(0, decode_rows)
+                if h.is_cuda:
+                    before, scores = cosine_scores(h, r, before)
+                else:
+                    after = normalize_for_cosine(h + r, epsilon)
+                    scores = (after * before).sum(dim=-1)
+                    before = after
+            else:
+                scores = F.cosine_similarity(hidden + residual, before, dim=-1)
+                if decode_rows is not None:
+                    scores = scores.index_select(0, decode_rows)
+            passed = scores > threshold
+            if self.latched:
+                seen = passed if seen is None else seen | passed
+                passed = seen
+            if passed.all().item():
                 depth = index
-                break
-        for layer in body.layers[depth:]:
-            hidden, residual = layer._forward_quant(positions, hidden, residual)
-        return body._norm_for(depth)(hidden, residual)[0]
+
+        norm = body._norm_for(depth)
+        if row_sets is None or depth == body.end_layer:
+            return norm(hidden, residual)[0], depth
+        output, _ = by_indices(body.norm, norm, (hidden, residual), row_sets)
+        return output, depth
 
     def __call__(self, ids, positions, intermediate_tensors=None, inputs_embeds=None):
         phases = current_phases()
@@ -113,4 +142,5 @@ class EagerDispatch:
 
 def install_eager_dispatch(worker):
     body = worker.model_runner.get_model().model
-    body.forward = EagerDispatch(body)
+    decode_graph = getattr(body.config, "river_decode_graph", DEFAULT_DECODE_GRAPH)
+    body.forward = EagerDispatch(body, decode_graph=decode_graph)

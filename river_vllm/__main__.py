@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .runtime import DECODE_GRAPHS, build_llm
+from .runtime import DECODE_GRAPHS, DEFAULT_DECODE_GRAPH, build_llm
 
 
 def main():
@@ -12,8 +12,8 @@ def main():
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--tokenizer", type=Path)
     parser.add_argument("--threshold", type=float, default=0.5)
-    parser.add_argument("--decode-graph", choices=DECODE_GRAPHS, default="direct",
-                        help="direct exit, or a one-layer delayed native IF/ELSE graph")
+    parser.add_argument("--decode-graph", choices=DECODE_GRAPHS, default=DEFAULT_DECODE_GRAPH,
+                        help="latched exits (default), or the historical direct and ifelse paths")
     parser.add_argument("--capture-sizes", type=int, nargs="+", default=[1])
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=32)

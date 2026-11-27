@@ -3,10 +3,11 @@
 import os
 
 
-DECODE_GRAPHS = ("direct", "ifelse")
+DEFAULT_DECODE_GRAPH = "latched"
+DECODE_GRAPHS = (DEFAULT_DECODE_GRAPH, "direct", "ifelse")
 
 
-def build_llm(model, *, tokenizer=None, threshold=0.5, capture_sizes=(1,), decode_graph="direct"):
+def build_llm(model, *, tokenizer=None, threshold=0.5, capture_sizes=(1,), decode_graph=DEFAULT_DECODE_GRAPH):
     """Load a local River GPTQ checkpoint and capture its decode shapes."""
     sizes = sorted(set(capture_sizes))
     if not sizes or sizes[0] < 1 or sizes[-1] > 64:
